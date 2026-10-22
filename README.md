@@ -1,59 +1,89 @@
-# 🚀 Panduan Lengkap Praktikum: Mengulik Fitur Container di MikroTik CHR (RouterOS v7)
+Markdown
+# 🚀 MikroTik CHR Web Server with Cloudflare Tunnel
 
-Repositori ini berisi panduan komprehensif untuk persiapan Virtual Machine (VM), penanganan kendala sistem (*troubleshooting*), hingga praktik langsung menjalankan Docker Container (Nginx Web Server) di dalam MikroTik Cloud Hosted Router (CHR) v7 via WinBox.
-
----
-
-## 1. Prasyarat & Persiapan VM
-Sebelum mulai mengulik container, pastikan VM MikroTik CHR Anda memiliki spesifikasi yang memadai:
-* **Virtualizer:** VMware Workstation / VirtualBox / Proxmox (Pastikan fitur virtualisasi BIOS/SVM/VT-x sudah *Enabled* di komputer host).
-* **RAM:** Minimal **1 GB (1024 MB)**.
-* **vCPU:** Cukup **1 atau 2 vCPU**.
-* **Hard Disk:** Minimal **2 GB – 4 GB** (Gunakan tipe SCSI/SATA, **jangan** menggunakan disk kosong berukuran 128 MB atau tipe IDE agar tidak cepat penuh dan lemot). Pastikan file image VMDK CHR resmi sudah terpasang dengan benar sebagai sistem utama.
+Repositori ini berisi panduan dan konfigurasi lengkap untuk menjalankan web server berbasis **Nginx** di dalam kontainer **MikroTik CHR**, yang terhubung secara publik dan aman menggunakan **Cloudflare Tunnel**.
 
 ---
 
-## 2. Konfigurasi Global Container di WinBox
-1. Masuk ke menu **Container** -> Pilih tab **Config**.
-2. Sesuaikan parameter berikut:
-   * **Registry URL:** `https://registry-1.docker.io`
-   * **Layer Dir:** Pilih disk/direktori penyimpanan router yang lega.
-   * **Memory High:** `256 MiB` (sesuaikan dengan kapasitas RAM CHR).
-3. Klik **Apply** lalu **OK**.
+## 📋 Prasyarat: Mengaktifkan Fitur Container & Jaringan
 
----
+Sebelum membuat kontainer, pastikan fitur **Container** di RouterOS (versi 7.x) sudah aktif dan konfigurasi dasarnya telah disiapkan.
 
-## 3. Membuat Jaringan (VETH & IP Address)
-VETH digunakan sebagai jembatan komunikasi antara RouterOS dan container.
+### 1. Aktifkan Fitur Container via Terminal WinBox
+```routeros
+/system/device-mode/update container=yes
+Catatan: Lakukan Reboot pada MikroTik jika diminta oleh sistem.
 
-### A. Membuat Interface VETH
-1. Buka menu **Interfaces** -> Pilih tab **VETH** -> Klik tombol **`+` (Add)**.
-2. Atur parameter:
-   * **Name:** `veth1`
-   * **Address:** `172.17.0.2/24`
-   * **Gateway:** `172.17.0.1`
-3. Klik **Apply** lalu **OK**.
+2. Konfigurasi Interface VETH & Bridge Khusus Kontainer
+Cuplikan kode
+/interface bridge add name=bridge-container
+/interface veth add name=veth1 address=172.17.0.2/24 gateway=172.17.0.1
+/interface veth add name=veth-cf address=172.17.0.3/24 gateway=172.17.0.1
+/interface bridge port add bridge=bridge-container interface=veth1
+/interface bridge port add bridge=bridge-container interface=veth-cf
+/ip address add address=172.17.0.1/24 interface=bridge-container
+3. Konfigurasi DNS & SRC NAT (Akses Internet Kontainer)
+Agar kontainer dapat mengunduh image dari Docker Hub dan terhubung ke internet, tambahkan DNS Resolver dan aturan SRC NAT (Masquerading):
 
-### B. Menambahkan IP Address Gateway ke Router
-1. Masuk ke menu **IP** -> **Addresses** -> Klik tombol **`+` (Add)**.
-2. Masukkan **Address:** `172.17.0.1/24`.
-3. Pilih **Interface:** `veth1`.
-4. Klik **Apply** lalu **OK**.
+Cuplikan kode
+# Set DNS Resolver MikroTik
+/ip dns set allow-remote-requests=yes servers=1.1.1.1,8.8.8.8
 
----
+# Tambahkan Aturan Masquerade NAT untuk Subnet Kontainer
+/ip firewall nat add chain=srcnat src-address=172.17.0.0/24 action=masquerade
+🛠️ BAB 1: Deployment & Konfigurasi Nginx (Reverse Proxy)
+Pada bab ini, kita akan membuat dan menjalankan kontainer Nginx sebagai web server di MikroTik.
 
-## 4. Menjalankan Container Nginx
-1. Masuk ke menu **Container** -> Pilih tab **Containers** -> Klik tombol **`+` (Add)**.
-2. Masukkan konfigurasi berikut:
-   * **Remote Image:** `nginx:alpine`
-   * **Interface:** `veth1`
-   * **Root Dir:** Pilih folder disk penyimpanan container.
-3. Klik **Apply**. Router akan otomatis melakukan *pulling* (mengunduh) image dari Docker Hub.
-4. Klik tombol **Start** hingga statusnya berubah menjadi **running**.
+1. Buat Container Nginx
+Jalankan perintah berikut di Terminal MikroTik:
 
----
+Cuplikan kode
+/container add remote-image=nginx:alpine interface=veth1 root-dir=container/nginx
+2. Jalankan Container Nginx
+Cek daftar kontainer untuk melihat nomor ID-nya:
 
-## 5. Pengujian (Testing)
-Buka browser di laptop/PC Anda, kemudian akses alamat IP container:
-```text
-[http://172.17.0.2](http://172.17.0.2)
+Cuplikan kode
+/container print
+Jalankan kontainer Nginx (ganti 0 dengan ID kontainer Nginx Anda):
+
+Cuplikan kode
+/container start 0
+Pastikan status kontainer berubah menjadi R (Running).
+
+🌐 BAB 2: Deployment & Konfigurasi Cloudflare Tunnel
+Pada bab ini, kita akan membuat jalur tunnel aman dari Cloudflare Zero Trust ke kontainer Nginx tanpa perlu membuka port IP Publik secara langsung.
+
+1. Buat Tunnel di Dashboard Cloudflare
+Buka Cloudflare Zero Trust → Networks → Tunnels.
+
+Klik Create a Tunnel, beri nama tunnel (misal: mikrotik-tunnel), lalu simpan.
+
+Salin Token Tunnel yang diberikan oleh Cloudflare.
+
+Pada bagian Public Hostname:
+
+Subdomain/Domain: Masukkan domain Anda (contoh: web.apriliatmand.my.id).
+
+Service: Pilih HTTP dan masukkan IP VETH Nginx: 172.17.0.2:80.
+
+2. Deploy Container Cloudflared di MikroTik
+Jalankan perintah ini di Terminal MikroTik (ganti <TOKEN_CLOUDFLARE_ANDA> dengan token yang disalin):
+
+Cuplikan kode
+/container add remote-image=cloudflare/cloudflared:latest interface=veth-cf root-dir=container/cloudflared cmd="tunnel --no-autoupdate run --token <TOKEN_CLOUDFLARE_ANDA>"
+3. Jalankan Container Cloudflared
+Cek ID kontainer cloudflared:
+
+Cuplikan kode
+/container print
+Jalankan kontainer Cloudflared (ganti 1 dengan ID kontainer Cloudflared Anda):
+
+Cuplikan kode
+/container start 1
+Pastikan status kontainer R (Running) dan di dashboard Cloudflare status tunnel berubah menjadi HEALTHY.
+
+✅ Verifikasi & Pengujian
+Buka browser dan akses domain publik Anda:
+👉 https://web.apriliatmand.my.id
+
+Jika konfigurasi berhasil, halaman Welcome to nginx! akan tampil dengan koneksi HTTPS yang aman melalui Cloudflare Tunnel.
